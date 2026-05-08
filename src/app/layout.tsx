@@ -7,6 +7,8 @@ import ChatWidget from "@/components/ChatWidget";
 import SocialSidebar from "@/components/SocialSidebar";
 
 import "./globals.css";
+import "./tw-animate.css";
+
 
 const geist = Geist({subsets:['latin'],variable:'--font-sans'});
 

@@ -1,52 +1,23 @@
-@import "tailwindcss";
-@import "tw-animate-css";
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
 
-@theme {
-  /* HCTPL Custom Brand Colors - v4 syntax */
-  --color-brand-primary: #00B9EF;
-  --color-brand-dark: #020617;
-  --color-brand-white: #F8FAFC;
-  --color-brand-blue: #3B82F6;
-  --color-brand-cyan: #00D2FF;
+@layer base {
+  :root {
+    /* HCTPL Custom Brand Colors - v3 variables */
+    --brand-primary: #00B9EF;
+    --brand-dark: #020617;
+    --brand-white: #F8FAFC;
+    --brand-blue: #3B82F6;
+    --brand-cyan: #00D2FF;
 
-  /* Custom Animations */
-  --animate-marquee: marquee 30s linear infinite;
-  @keyframes marquee {
-    0% { transform: translateX(-50%); }
-    100% { transform: translateX(0); }
+    /* Shadcn UI compatibility variables */
+    --color-brand-primary: var(--brand-primary);
+    --color-brand-dark: var(--brand-dark);
+    --color-brand-white: var(--brand-white);
+    --color-brand-blue: var(--brand-blue);
+    --color-brand-cyan: var(--brand-cyan);
   }
-
-  /* Map Shadcn UI variables to v4 theme */
-  --color-border: hsl(var(--border));
-  --color-input: hsl(var(--input));
-  --color-ring: hsl(var(--ring));
-  --color-background: hsl(var(--background));
-  --color-foreground: hsl(var(--foreground));
-  
-  --color-primary: hsl(var(--primary));
-  --color-primary-foreground: hsl(var(--primary-foreground));
-  
-  --color-secondary: hsl(var(--secondary));
-  --color-secondary-foreground: hsl(var(--secondary-foreground));
-  
-  --color-destructive: hsl(var(--destructive));
-  --color-destructive-foreground: hsl(var(--destructive-foreground));
-  
-  --color-muted: hsl(var(--muted));
-  --color-muted-foreground: hsl(var(--muted-foreground));
-  
-  --color-accent: hsl(var(--accent));
-  --color-accent-foreground: hsl(var(--accent-foreground));
-  
-  --color-popover: hsl(var(--popover));
-  --color-popover-foreground: hsl(var(--popover-foreground));
-  
-  --color-card: hsl(var(--card));
-  --color-card-foreground: hsl(var(--card-foreground));
-
-  --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
 }
 
 @layer base {

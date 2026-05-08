@@ -9,7 +9,22 @@ import {
 
 // --- Types ---
 type ChatStep = 'CHOOSE_LANG' | 'INTRO' | 'ASK_NAME' | 'ASK_EMAIL' | 'ASK_PHONE' | 'INTERACTIVE';
-type AssistantState = 'idle' | 'listening' | 'thinking' | 'speaking';
+type AssistantState = 'idle' | 'listening' | 'thinking' | 'speaking' | 'typing';
+
+interface RichCard {
+  title: string;
+  description: string;
+  image?: string;
+  actionLabel?: string;
+  actionUrl?: string;
+}
+
+interface ChatMessage {
+  role: 'user' | 'ai';
+  text: string;
+  timestamp: string;
+  cards?: RichCard[];
+}
 
 interface Translation {
   header: string;
@@ -192,7 +207,7 @@ export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(true);
   const [language, setLanguage] = useState('en');
   const [message, setMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<{ role: 'user' | 'ai'; text: string; timestamp: string }[]>([]);
+  const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [chatStep, setChatStep] = useState<ChatStep>('CHOOSE_LANG');
   const [isTyping, setIsTyping] = useState(false);
   const [userName, setUserName] = useState("");
@@ -205,8 +220,7 @@ export default function ChatWidget() {
   const [speechPromptVisible, setSpeechPromptVisible] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [leadCreated, setLeadCreated] = useState(false);
-  const [leadSaving, setLeadSaving] = useState(false);
-  const [leadSaveError, setLeadSaveError] = useState<string | null>(null);
+
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -257,14 +271,24 @@ export default function ChatWidget() {
     window.speechSynthesis.speak(utterance);
   };
 
-  const simulateAiResponse = (text: string, nextStep?: ChatStep, langOverride?: string) => {
-    setIsTyping(true);
+  const simulateAiResponse = (text: string, nextStep?: ChatStep, langOverride?: string, cards?: RichCard[]) => {
     setAssistantState('thinking');
+    setIsTyping(true);
+    
+    // Phase 1: Thinking (800ms)
     setTimeout(() => {
-      setChatHistory(prev => [...prev, { role: 'ai', text, timestamp: getTimestamp() }]);
-      setIsTyping(false);
-      if (nextStep) setChatStep(nextStep);
-      speak(text, langOverride);
+      setAssistantState('typing');
+      
+      // Phase 2: Typing (proportional to text length, min 1000ms)
+      const typingTime = Math.max(1000, Math.min(2500, text.length * 15));
+      
+      setTimeout(() => {
+        setChatHistory(prev => [...prev, { role: 'ai', text, timestamp: getTimestamp(), cards }]);
+        setIsTyping(false);
+        setAssistantState('idle'); // Temporarily idle before speaking starts
+        if (nextStep) setChatStep(nextStep);
+        speak(text, langOverride);
+      }, typingTime);
     }, 800);
   };
 
@@ -276,19 +300,23 @@ export default function ChatWidget() {
 
   const openChatWidget = () => {
     setIsOpen(true);
+    // Reset ALL speech flags so audio works every time the widget is opened
+    audioSpokenRef.current = false;
+    initialGreetingRequestedRef.current = false;
+    initialGreetingAttemptsRef.current = 0;
     setPendingInitialSpeak(true);
     pendingInitialSpeakRef.current = true;
     setSpeechPromptVisible(true);
-    initialGreetingRequestedRef.current = false;
-    speak(t.langPrompt);
   };
 
   const triggerInitialSpeech = () => {
-    if (pendingInitialSpeakRef.current && !initialGreetingRequestedRef.current) {
+    if (!initialGreetingRequestedRef.current) {
       initialGreetingRequestedRef.current = true;
-      initialGreetingAttemptsRef.current = 2;
+      audioSpokenRef.current = false; // allow speak to fire
       speak(t.langPrompt);
       setSpeechPromptVisible(false);
+      setPendingInitialSpeak(false);
+      pendingInitialSpeakRef.current = false;
     }
   };
 
@@ -312,19 +340,12 @@ export default function ChatWidget() {
   useEffect(() => {
     const mountTimer = window.setTimeout(() => setMounted(true), 0);
     
-    // Only auto-open on the very first load of the session
-    const hasAlreadyOpened = sessionStorage.getItem('hctpl_chat_opened');
-    if (!hasAlreadyOpened) {
-      setTimeout(() => openChatWidget(), 0);
-      sessionStorage.setItem('hctpl_chat_opened', 'true');
-      
-      // Force open repeatedly for 2 seconds only on first visit
-      const forceOpen = setInterval(() => setIsOpen(true), 200);
-      setTimeout(() => clearInterval(forceOpen), 2000);
-    } else {
-      // If already opened once in session, start closed
-      window.requestAnimationFrame(() => setIsOpen(false));
-    }
+    // Always auto-open on load
+    setTimeout(() => openChatWidget(), 0);
+    
+    // Force open briefly to ensure it stays up
+    const forceOpen = setInterval(() => setIsOpen(true), 200);
+    setTimeout(() => clearInterval(forceOpen), 1000);
 
     const loadVoices = () => window.speechSynthesis.getVoices();
     window.speechSynthesis.addEventListener('voiceschanged', loadVoices);
@@ -366,9 +387,14 @@ export default function ChatWidget() {
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
-    if (!pendingInitialSpeak || !hasInteracted || audioSpokenRef.current || initialGreetingAttemptsRef.current > 1 || initialGreetingRequestedRef.current) return;
+    if (!pendingInitialSpeak || !hasInteracted || initialGreetingRequestedRef.current) return;
     initialGreetingAttemptsRef.current += 1;
+    initialGreetingRequestedRef.current = true;
+    audioSpokenRef.current = false;
     speak(t.langPrompt);
+    setSpeechPromptVisible(false);
+    setPendingInitialSpeak(false);
+    pendingInitialSpeakRef.current = false;
   }, [pendingInitialSpeak, hasInteracted, language]);
 
   useEffect(() => {
@@ -404,9 +430,10 @@ export default function ChatWidget() {
       simulateAiResponse(activeT.askPhone, 'ASK_PHONE');
     } else if (chatStep === 'ASK_PHONE') {
       const phoneValue = msgToSend.toLowerCase().includes('skip') ? "Not provided" : msgToSend;
-      const leadPayload = buildLeadPayload(phoneValue);
-      createLead(leadPayload);
-      simulateAiResponse(`${activeT.interactiveStart} I have captured your contact details and created a lead for our team.`, 'INTERACTIVE');
+      // Skip lead creation API in static mode
+      setLeadCreated(true);
+      simulateAiResponse(`${activeT.interactiveStart} I have noted your details. Our team will reach out to you soon!`, 'INTERACTIVE');
+
     } else {
       const lowerMsg = msgToSend.toLowerCase();
       if (lowerMsg.includes('thank') || lowerMsg.includes('shukriya') || lowerMsg.includes('dhanyawad')) {
@@ -424,47 +451,21 @@ export default function ChatWidget() {
       }
       const allQuestions = activeT.faqCategories.flatMap(cat => cat.questions);
       const match = allQuestions.find(f => lowerMsg.includes(f.q.toLowerCase()));
+      
+      if (lowerMsg.includes('service') || lowerMsg.includes('what you do')) {
+        simulateAiResponse("We offer a range of premium IT services. Here are some of our core specialities:", undefined, undefined, [
+          { title: "App Development", description: "Modern iOS and Android apps built with React Native and Flutter.", actionLabel: "View Portfolio" },
+          { title: "AI Automation", description: "Custom AI agents and LLM integrations for your business.", actionLabel: "Explore AI" },
+          { title: "Cloud Security", description: "Enterprise-grade cloud infrastructure and security audits.", actionLabel: "Learn More" }
+        ]);
+        return;
+      }
+
       simulateAiResponse(match ? match.a : activeT.ansDefault);
     }
   };
 
-  const createLead = async (lead: Lead) => {
-    setLeadSaving(true);
-    setLeadSaveError(null);
 
-    try {
-      const response = await fetch('/api/leads', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(lead)
-      });
-
-      const data = await response.json();
-      const success = response.ok && data?.success;
-
-      if (!success) {
-        throw new Error(data?.message || 'Failed to save lead');
-      }
-
-      setLeadCreated(true);
-      return true;
-    } catch (error) {
-      console.error('Lead save error:', error);
-      setLeadSaveError('Could not save lead right now. Your details are still captured locally.');
-      return false;
-    } finally {
-      setLeadSaving(false);
-    }
-  };
-
-  const buildLeadPayload = (phoneValue: string) => ({
-    name: userName,
-    email: userEmail,
-    phone: phoneValue,
-    language,
-    source: 'Chatbot',
-    createdAt: new Date().toISOString()
-  });
 
   const resetChat = () => {
     setChatHistory([]);
@@ -473,7 +474,7 @@ export default function ChatWidget() {
     setUserEmail("");
     setAssistantState('idle');
     setLeadCreated(false);
-    setLeadSaveError(null);
+
     window.speechSynthesis.cancel();
     simulateAiResponse(translations[language].langPrompt);
   };
@@ -509,9 +510,9 @@ export default function ChatWidget() {
               initial={{ opacity: 0, y: 20 }} 
               animate={{ opacity: 1, y: 0 }} 
               exit={{ opacity: 0, y: 20 }} 
-              className="flex flex-col bg-white shadow-2xl border border-slate-200 overflow-hidden relative h-[600px] w-[420px] max-sm:h-[50vh] max-sm:w-[calc(100vw-40px)] rounded-[32px] max-sm:rounded-[20px]"
+              className="flex flex-col bg-white/80 backdrop-blur-2xl shadow-[0_20px_50px_rgba(0,0,0,0.15)] border border-white/40 overflow-hidden relative h-[600px] w-[420px] max-sm:h-[50vh] max-sm:w-[calc(100vw-40px)] rounded-[40px] max-sm:rounded-[24px]"
             >
-              <div className="p-4 border-b border-slate-100 flex items-center justify-between bg-white">
+              <div className="p-5 border-b border-white/20 flex items-center justify-between bg-white/20 backdrop-blur-md">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 rounded-full bg-emerald-500 flex items-center justify-center text-white font-black shadow-lg">A</div>
                   <div><h3 className="font-bold text-slate-800 text-sm">Aryan AI</h3><span className="text-[10px] text-green-500">● Online</span></div>
@@ -540,26 +541,41 @@ export default function ChatWidget() {
                   </div>
                 )}
                 {chatHistory.map((chat, idx) => (
-                  <div key={idx} className={`flex ${chat.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                    <div className={`px-4 py-2 rounded-2xl text-sm leading-relaxed shadow-sm ${chat.role === 'user' ? 'bg-emerald-500 text-white rounded-tr-none' : 'bg-white border border-slate-100 text-slate-700 rounded-tl-none'}`}>{chat.text}</div>
+                  <div key={idx} className="space-y-2">
+                    <div className={`flex ${chat.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`px-4 py-2.5 rounded-2xl text-sm leading-relaxed shadow-sm ${chat.role === 'user' ? 'bg-emerald-600 text-white rounded-tr-none' : 'bg-white/90 backdrop-blur-sm border border-white/50 text-slate-700 rounded-tl-none'}`}>
+                        {chat.text}
+                      </div>
+                    </div>
+                    {chat.cards && (
+                      <div className="flex gap-3 overflow-x-auto pb-4 pt-2 no-scrollbar px-2 -mx-2">
+                        {chat.cards.map((card, cIdx) => (
+                          <motion.div 
+                            key={cIdx} 
+                            initial={{ opacity: 0, scale: 0.9 }} 
+                            animate={{ opacity: 1, scale: 1 }} 
+                            className="min-w-[200px] max-w-[200px] bg-white/90 backdrop-blur-md rounded-3xl p-4 border border-white/60 shadow-lg flex flex-col gap-2 flex-shrink-0"
+                          >
+                            <h4 className="font-bold text-slate-800 text-xs">{card.title}</h4>
+                            <p className="text-[10px] text-slate-500 leading-tight">{card.description}</p>
+                            {card.actionLabel && (
+                              <button className="mt-2 w-full py-2 bg-emerald-500 text-white text-[10px] font-bold rounded-xl hover:bg-emerald-600 transition-colors">
+                                {card.actionLabel}
+                              </button>
+                            )}
+                          </motion.div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
 
                 {leadCreated && (
                   <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 shadow-sm mb-2">
-                    Great! Your lead has been created and our team will follow up soon.
+                    Great! Your details are noted and our team will follow up soon.
                   </div>
                 )}
-                {leadSaveError && (
-                  <div className="rounded-3xl border border-rose-200 bg-rose-50 p-3 text-xs text-rose-900 shadow-sm mb-2">
-                    {leadSaveError}
-                  </div>
-                )}
-                {leadSaving && (
-                  <div className="rounded-3xl border border-emerald-200 bg-emerald-50 p-3 text-xs text-emerald-900 shadow-sm mb-2">
-                    Saving your lead details now... Please wait.
-                  </div>
-                )}
+
                 {chatStep === 'INTERACTIVE' && (
                   <div className="space-y-4 pt-2">
                     <div className="bg-slate-100 border border-slate-200 rounded-3xl p-4">
@@ -632,7 +648,21 @@ export default function ChatWidget() {
                     </div>
                   </div>
                 )}
-                {isTyping && <div className="flex items-center gap-2 text-[10px] text-slate-400 font-medium px-2"><Loader2 size={10} className="animate-spin" /> Aryan is thinking...</div>}
+                {assistantState === 'thinking' && (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-2 text-[10px] text-slate-400 font-medium px-2">
+                    <Loader2 size={10} className="animate-spin" /> Aryan is thinking...
+                  </motion.div>
+                )}
+                {assistantState === 'typing' && (
+                  <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-3 text-[10px] text-emerald-500 font-bold px-2">
+                    <div className="flex gap-1">
+                      <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ repeat: Infinity, duration: 1 }} className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                      <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                      <motion.span animate={{ opacity: [0, 1, 0] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="w-1.5 h-1.5 bg-emerald-500 rounded-full" />
+                    </div>
+                    Aryan is typing...
+                  </motion.div>
+                )}
                 {assistantState === 'listening' && <div className="flex items-center gap-2 text-[10px] text-red-500 font-bold px-2 animate-pulse"><div className="w-2 h-2 bg-red-500 rounded-full" /> Aryan is listening...</div>}
                 <div ref={messagesEndRef} />
               </div>
@@ -655,8 +685,10 @@ export default function ChatWidget() {
             openChatWidget();
           } else {
             setIsOpen(false);
-            // Stop talking when closed
             window.speechSynthesis.cancel();
+            // Reset so speech is ready for next open
+            audioSpokenRef.current = false;
+            initialGreetingRequestedRef.current = false;
           }
         }} 
         className="w-14 h-14 max-sm:w-12 max-sm:h-12 bg-emerald-500 rounded-full shadow-2xl flex items-center justify-center text-white mt-4 hover:scale-105 transition-all active:scale-95"
